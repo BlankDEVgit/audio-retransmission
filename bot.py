@@ -31,7 +31,7 @@ RECONNECT_DELAY = int(os.getenv("RECONNECT_DELAY", "2"))
 ENABLE_CONSOLE = os.getenv("ENABLE_CONSOLE", "true").lower() == "true"
 
 # ──────────────────────────────────────────────
-#  CPU priority — set immediately like the original
+#  CPU priority — set immediately at module level
 # ──────────────────────────────────────────────
 try:
     p = psutil.Process(os.getpid())
@@ -48,14 +48,13 @@ except Exception:
 # ──────────────────────────────────────────────
 #  Audio quality presets (Opus encoder only)
 #
-#  IMPORTANT: These ONLY change the Opus encoder
-#  bitrate and FEC. The FFmpeg pipeline is NEVER
-#  touched — it always outputs stereo 48kHz PCM.
-#  discord.py requires -ac 2 at all times.
+#  These ONLY change the Opus encoder bitrate/FEC.
+#  The FFmpeg pipeline always outputs stereo 48kHz
+#  PCM and is NEVER modified by presets.
 # ──────────────────────────────────────────────
 QUALITY_PRESETS = {
     "low":      {"bitrate": 48_000,  "fec": False},
-    "balanced": {"bitrate": 128_000, "fec": False},   # discord.py default — encoder untouched
+    "balanced": {"bitrate": 128_000, "fec": False},
     "high":     {"bitrate": 256_000, "fec": False},
     "ultra":    {"bitrate": 384_000, "fec": False},
 }
@@ -66,7 +65,7 @@ BAD_INTERNET = {
     "packet_loss_percent": 25,
 }
 
-# Runtime state
+# Runtime state — mutable via console commands
 runtime = {
     "quality": os.getenv("AUDIO_QUALITY", "balanced"),
     "bad_internet": os.getenv("BAD_INTERNET", "false").lower() == "true",
@@ -88,7 +87,7 @@ voice_task = None
 
 
 # ──────────────────────────────────────────────
-#  Audio source — identical to original
+#  Audio source — ultra low-latency FFmpeg capture
 # ──────────────────────────────────────────────
 def create_audio_source():
     """Ultra low-latency FFmpeg capture from virtual cable."""
@@ -117,10 +116,10 @@ def create_audio_source():
 #  Opus encoder configuration
 # ──────────────────────────────────────────────
 def configure_encoder(vc):
-    """Apply quality preset to the Opus encoder only.
+    """Apply quality preset to the Opus encoder.
 
-    On 'balanced' without bad-internet, does nothing — the encoder
-    keeps discord.py's native 128kbps defaults untouched.
+    On 'balanced' without bad-internet, does nothing —
+    the encoder keeps discord.py's native 128kbps defaults.
     """
     if runtime["quality"] == "balanced" and not runtime["bad_internet"]:
         return
