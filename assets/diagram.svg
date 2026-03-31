@@ -32,7 +32,7 @@
   <rect width="900" height="320" rx="16" fill="url(#bg)"/>
 
   <!-- Title -->
-  <text x="450" y="40" text-anchor="middle" fill="#ffffff" font-size="18" font-weight="bold" opacity="0.9">How Audio Retransmission Works</text>
+  <text x="450" y="40" text-anchor="middle" fill="#ffffff" font-size="18" font-weight="bold" opacity="0.9">How Discord Audio Bridge Works</text>
 
   <!-- Box 1: PC Audio -->
   <rect x="30" y="80" width="170" height="90" rx="12" fill="url(#box1)" filter="url(#shadow)"/>
