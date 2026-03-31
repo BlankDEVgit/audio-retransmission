@@ -1,5 +1,5 @@
 """
-Audio Retransmission Bot
+Discord Audio Bridge
 Created by Blank
 
 Captures system audio via a virtual audio cable and streams it

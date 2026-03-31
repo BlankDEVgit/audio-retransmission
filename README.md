@@ -5,7 +5,7 @@
   <img src="https://img.shields.io/badge/license-MIT-yellow?style=for-the-badge" />
 </p>
 
-<h1 align="center">Audio Retransmission</h1>
+<h1 align="center">Discord Audio Bridge</h1>
 
 <p align="center">
   <b>Stream your PC audio to a Discord voice channel in real time with ultra-low latency.</b><br/>
@@ -82,8 +82,8 @@ Any device on Discord (PS5, phone, tablet...)
 ### 1. Clone the repo
 
 ```bash
-git clone https://github.com/Gonic1/audio-retransmission.git
-cd audio-retransmission
+git clone https://github.com/Gonic1/discord-audio-bridge.git
+cd discord-audio-bridge
 ```
 
 ### 2. Install dependencies
@@ -211,15 +211,17 @@ FEC is built into the Opus codec and adds **no extra latency** — it's recovery
 ## Project Structure
 
 ```
-audio-retransmission/
+discord-audio-bridge/
 ├── bot.py              # Main bot — the only file you need to run
 ├── .env.example        # Configuration template
 ├── .env                # Your local config (git-ignored)
 ├── requirements.txt    # Python dependencies
 ├── ffmpeg.exe          # FFmpeg binary (git-ignored, download separately)
 ├── LICENSE             # MIT License
-└── README.md
+└── README.md           # This file
 ```
+
+> A **compiled .exe release** is also available in [Releases](https://github.com/BlankDEVgit/discord-audio-bridge/releases) — no Python install required.
 
 ---
 
