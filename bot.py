@@ -38,6 +38,7 @@ MAX_RECONNECT_DELAY = int(os.getenv("MAX_RECONNECT_DELAY", "30"))    # Max backo
 HEALTH_CHECK_INTERVAL = float(os.getenv("HEALTH_CHECK_INTERVAL", "0.5"))  # Stream poll (s)
 PROCESS_PRIORITY = os.getenv("PROCESS_PRIORITY", "high")             # "realtime", "high", or "normal"
 SELF_DEAF = os.getenv("SELF_DEAF", "true").lower() == "true"         # Deaf the bot in VC
+ENABLE_CONSOLE = os.getenv("ENABLE_CONSOLE", "true").lower() == "true"  # Command console on/off
 
 # ──────────────────────────────────────────────
 #  Runtime state — mutable, changed via commands
@@ -45,7 +46,7 @@ SELF_DEAF = os.getenv("SELF_DEAF", "true").lower() == "true"         # Deaf the 
 runtime = {
     "quality": os.getenv("AUDIO_QUALITY", "balanced"),
     "bad_internet": os.getenv("BAD_INTERNET", "false").lower() == "true",
-    "vc": None,  # Active voice client reference (set by stream_audio)
+    "vc": None,
 }
 
 # ──────────────────────────────────────────────
@@ -114,63 +115,39 @@ def set_process_priority():
 
 
 # ──────────────────────────────────────────────
-#  Audio settings resolver
-# ──────────────────────────────────────────────
-def get_audio_settings():
-    """Resolve the active audio settings from preset + bad internet mode."""
-    preset = QUALITY_PRESETS[runtime["quality"]]
-    if runtime["bad_internet"]:
-        return {
-            "bitrate": BAD_INTERNET_OVERRIDES["bitrate"],
-            "channels": BAD_INTERNET_OVERRIDES["channels"],
-            "fec": True,
-            "packet_loss_percent": BAD_INTERNET_OVERRIDES["packet_loss_percent"],
-        }
-    return {
-        "bitrate": preset["bitrate"],
-        "channels": preset["channels"],
-        "fec": False,
-        "packet_loss_percent": 0,
-    }
-
-
-# ──────────────────────────────────────────────
 #  Audio source
 # ──────────────────────────────────────────────
 def create_audio_source():
     """
     Build an FFmpeg audio source tuned for ultra-low latency.
 
-    The pipeline: DirectShow capture → raw PCM at 48 kHz →
+    The pipeline: DirectShow capture -> raw PCM at 48 kHz ->
     Discord voice connection. Every buffer and probe setting is
     minimized to keep end-to-end delay as short as possible.
     """
-    settings = get_audio_settings()
-    channels = settings["channels"]
+    # Determine channel count: 2 (stereo) by default, 1 (mono) for low/bad-internet
+    if runtime["bad_internet"]:
+        channels = BAD_INTERNET_OVERRIDES["channels"]
+    else:
+        channels = QUALITY_PRESETS[runtime["quality"]]["channels"]
 
     return discord.FFmpegPCMAudio(
         f"audio={AUDIO_DEVICE}",
         executable=FFMPEG_PATH,
         before_options=(
-            # DirectShow capture with minimal buffer
-            f"-f dshow "
-            f"-audio_buffer_size {AUDIO_BUFFER_SIZE} "
-            # Skip probing — the format is known
-            f"-probesize {PROBE_SIZE} -analyzeduration 0 "
-            # Aggressive low-latency flags
-            "-fflags nobuffer+discardcorrupt+flush_packets "
-            "-flags low_delay "
-            "-avioflags direct "
-            # Minimal read buffer
-            f"-thread_queue_size {THREAD_QUEUE_SIZE} "
-            f"-rtbufsize {RT_BUFFER_SIZE}"
+            f'-f dshow '
+            f'-audio_buffer_size {AUDIO_BUFFER_SIZE} '
+            f'-probesize {PROBE_SIZE} -analyzeduration 0 '
+            '-fflags nobuffer+discardcorrupt+flush_packets '
+            '-flags low_delay '
+            '-avioflags direct '
+            f'-thread_queue_size {THREAD_QUEUE_SIZE} '
+            f'-rtbufsize {RT_BUFFER_SIZE}'
         ),
         options=(
-            # Output: raw PCM at Discord's native format (48 kHz, 16-bit)
-            f"-ac {channels} -ar 48000 -f s16le "
-            # Force-flush every packet — zero output buffering
-            "-flush_packets 1 "
-            "-fflags +flush_packets"
+            f'-ac {channels} -ar 48000 -f s16le '
+            '-flush_packets 1 '
+            '-fflags +flush_packets'
         ),
     )
 
@@ -178,25 +155,33 @@ def create_audio_source():
 # ──────────────────────────────────────────────
 #  Opus encoder configuration
 # ──────────────────────────────────────────────
-def configure_encoder(vc, force=False):
-    """Apply quality preset and bad-internet settings to the Opus encoder.
+def configure_encoder(vc):
+    """Apply quality/bad-internet settings to the Opus encoder.
 
-    Skips configuration when using 'balanced' preset without bad-internet,
-    since balanced matches discord.py's native defaults exactly.
+    On 'balanced' without bad-internet, does nothing — discord.py's
+    native defaults (128kbps stereo) are already optimal.
     """
-    if not force and runtime["quality"] == "balanced" and not runtime["bad_internet"]:
+    if runtime["quality"] == "balanced" and not runtime["bad_internet"]:
         return
 
-    settings = get_audio_settings()
-    try:
-        vc.encoder.set_bitrate(settings["bitrate"])
-        vc.encoder.set_fec(settings["fec"])
-        vc.encoder.set_expected_packet_loss_percent(settings["packet_loss_percent"])
+    if runtime["bad_internet"]:
+        bitrate = BAD_INTERNET_OVERRIDES["bitrate"]
+        fec = True
+        plp = BAD_INTERNET_OVERRIDES["packet_loss_percent"]
+        label = "bad internet"
+    else:
+        preset = QUALITY_PRESETS[runtime["quality"]]
+        bitrate = preset["bitrate"]
+        fec = False
+        plp = 0
+        label = runtime["quality"]
 
-        mode = "bad internet" if runtime["bad_internet"] else runtime["quality"]
-        ch_label = "mono" if settings["channels"] == 1 else "stereo"
-        print(f"[QUALITY] {mode} — {settings['bitrate'] // 1000}kbps {ch_label}"
-              f"{' + FEC' if settings['fec'] else ''}")
+    try:
+        vc.encoder.set_bitrate(bitrate)
+        vc.encoder.set_fec(fec)
+        vc.encoder.set_expected_packet_loss_percent(plp)
+        ch = "mono" if (runtime["bad_internet"] or QUALITY_PRESETS[runtime["quality"]]["channels"] == 1) else "stereo"
+        print(f"[QUALITY] {label} — {bitrate // 1000}kbps {ch}{' + FEC' if fec else ''}")
     except Exception as exc:
         print(f"[QUALITY] Could not configure encoder: {exc}")
 
@@ -206,7 +191,6 @@ def configure_encoder(vc, force=False):
 # ──────────────────────────────────────────────
 intents = discord.Intents.default()
 intents.voice_states = True
-# Disable unused heavy intents
 intents.message_content = False
 intents.members = False
 intents.presences = False
@@ -220,13 +204,7 @@ voice_task = None
 #  Voice streaming loop
 # ──────────────────────────────────────────────
 async def stream_audio():
-    """
-    Persistent voice-channel loop with automatic reconnection.
-
-    Connects to the configured voice channel, starts streaming,
-    and monitors the audio source. If the connection drops or the
-    source stops, it reconnects with exponential backoff.
-    """
+    """Persistent voice-channel loop with automatic reconnection."""
     await client.wait_until_ready()
     backoff = RECONNECT_DELAY
 
@@ -281,50 +259,62 @@ async def stream_audio():
 
 
 # ──────────────────────────────────────────────
-#  Live settings swap
+#  Live settings swap (used by command console)
 # ──────────────────────────────────────────────
 def apply_live_settings():
-    """
-    Apply current runtime settings to the active voice client.
-
-    Bitrate and FEC are changed instantly on the Opus encoder.
-    If the channel count changed (mono ↔ stereo), the FFmpeg
-    source is restarted — causes a brief audio blip (~200ms).
-    """
+    """Apply current runtime settings to the active voice client."""
     vc = runtime["vc"]
     if vc is None or not vc.is_connected():
         print("[CMD] Not connected — settings will apply on next connect.")
         return
 
-    settings = get_audio_settings()
-    needs_source_restart = False
+    # If channel count changed (mono <-> stereo), restart FFmpeg source
+    old_channels = runtime.get("_last_channels", 2)
+    if runtime["bad_internet"]:
+        new_channels = BAD_INTERNET_OVERRIDES["channels"]
+    else:
+        new_channels = QUALITY_PRESETS[runtime["quality"]]["channels"]
 
-    # Check if channel count changed (requires FFmpeg restart)
-    if vc.is_playing() and vc.source:
-        old_channels = 1 if runtime.get("_last_channels") == 1 else 2
-        if settings["channels"] != old_channels:
-            needs_source_restart = True
-
-    runtime["_last_channels"] = settings["channels"]
-
-    if needs_source_restart:
+    if new_channels != old_channels and vc.is_playing():
         print("[CMD] Channel count changed — restarting audio source...")
         vc.stop()
         vc.play(create_audio_source())
 
-    configure_encoder(vc, force=True)
+    runtime["_last_channels"] = new_channels
+
+    # Force encoder config even on balanced (user explicitly asked)
+    if runtime["bad_internet"]:
+        bitrate = BAD_INTERNET_OVERRIDES["bitrate"]
+        fec = True
+        plp = BAD_INTERNET_OVERRIDES["packet_loss_percent"]
+        label = "bad internet"
+    else:
+        preset = QUALITY_PRESETS[runtime["quality"]]
+        bitrate = preset["bitrate"]
+        fec = False
+        plp = 0
+        label = runtime["quality"]
+
+    try:
+        vc.encoder.set_bitrate(bitrate)
+        vc.encoder.set_fec(fec)
+        vc.encoder.set_expected_packet_loss_percent(plp)
+        ch = "mono" if new_channels == 1 else "stereo"
+        print(f"[QUALITY] {label} — {bitrate // 1000}kbps {ch}{' + FEC' if fec else ''}")
+    except Exception as exc:
+        print(f"[QUALITY] Could not apply: {exc}")
 
 
 # ──────────────────────────────────────────────
-#  Command console (runs alongside the bot)
+#  Command console (optional, runs alongside bot)
 # ──────────────────────────────────────────────
 HELP_TEXT = """
 Commands (type while the bot is running):
-  quality <preset>   Set audio quality: low, balanced, high, ultra
+  quality <preset>       Set audio quality: low, balanced, high, ultra
   bad-internet <on|off>  Toggle bad internet mode (FEC + low bitrate)
-  status             Show current settings
-  help               Show this message
-  quit / exit        Stop the bot
+  status                 Show current settings
+  help                   Show this message
+  quit / exit            Stop the bot
 """.strip()
 
 
@@ -366,15 +356,21 @@ async def command_console():
                     print("[CMD] Usage: bad-internet <on|off>")
 
             elif command == "status":
-                settings = get_audio_settings()
-                ch = "mono" if settings["channels"] == 1 else "stereo"
+                if runtime["bad_internet"]:
+                    br = BAD_INTERNET_OVERRIDES["bitrate"]
+                    ch = "mono"
+                    fec = True
+                else:
+                    preset = QUALITY_PRESETS[runtime["quality"]]
+                    br = preset["bitrate"]
+                    ch = "mono" if preset["channels"] == 1 else "stereo"
+                    fec = False
                 vc = runtime["vc"]
                 connected = "yes" if vc and vc.is_connected() else "no"
                 playing = "yes" if vc and vc.is_playing() else "no"
                 print(f"[STATUS] Quality: {runtime['quality']} | "
                       f"Bad internet: {'on' if runtime['bad_internet'] else 'off'} | "
-                      f"{settings['bitrate'] // 1000}kbps {ch}"
-                      f"{' + FEC' if settings['fec'] else ''} | "
+                      f"{br // 1000}kbps {ch}{' + FEC' if fec else ''} | "
                       f"Connected: {connected} | Playing: {playing}")
 
             elif command in ("quit", "exit"):
@@ -393,12 +389,13 @@ async def command_console():
 
 @client.event
 async def on_ready():
-    """Start the audio stream and command console once connected."""
+    """Start the audio stream once the bot is connected to Discord."""
     global voice_task
     print(f"[BOT] Logged in as {client.user}")
     if voice_task is None or voice_task.done():
         voice_task = asyncio.create_task(stream_audio())
-        asyncio.create_task(command_console())
+        if ENABLE_CONSOLE:
+            asyncio.create_task(command_console())
 
 
 # ──────────────────────────────────────────────
